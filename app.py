@@ -6,7 +6,7 @@ import calendar
 st.set_page_config(page_title="Vacaciones Operarios", page_icon="📅", layout="centered")
 
 # URL de tu implementación de Apps Script
-API_URL = "TU_URL_DE_APPS_SCRIPT_AQUI"
+API_URL = "https://script.google.com/macros/s/AKfycbxs3HejJqWfWpEls3s1N7mciFAuWO4eEi2xMVA-18HWogzSjlW7730kW07CI0hKljoU_g/exec"
 
 # Inicializar estados de la sesión
 if "logged_in" not in st.session_state:
