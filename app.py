@@ -3,11 +3,10 @@ import requests
 import datetime
 import calendar
 
-# Configuración de página optimizada para celular
 st.set_page_config(page_title="Vacaciones Operarios", page_icon="📅", layout="centered")
 
-# Reemplaza con la URL que copiaste al implementar tu Apps Script
-API_URL = "https://script.google.com/macros/s/AKfycbxs3HejJqWfWpEls3s1N7mciFAuWO4eEi2xMVA-18HWogzSjlW7730kW07CI0hKljoU_g/exec"
+# URL de tu implementación de Apps Script
+API_URL = "TU_URL_DE_APPS_SCRIPT_AQUI"
 
 # Inicializar estados de la sesión
 if "logged_in" not in st.session_state:
@@ -16,6 +15,8 @@ if "usuario" not in st.session_state:
     st.session_state.usuario = {}
 if "dias_seleccionados" not in st.session_state:
     st.session_state.dias_seleccionados = []
+if "mostrar_aviso_rh" not in st.session_state:
+    st.session_state.mostrar_aviso_rh = False
 
 def fetch_data():
     try:
@@ -24,6 +25,15 @@ def fetch_data():
     except:
         st.error("Error al conectar con la base de datos de Google Sheets.")
         return {"personal": [], "diasOcupados": []}
+
+# --- POP-UP DE INFORMACIÓN DE RH ---
+@st.dialog("📌 Recordatorio Importante")
+def aviso_rh_pop_up():
+    st.warning("Recuerda recoger tu pase de vacaciones y entregarlo a RH al menos un día hábil antes de tu día de vacaciones.")
+    st.write("")
+    if st.button("Entendido", use_container_width=True, type="primary"):
+        st.session_state.mostrar_aviso_rh = False
+        st.rerun()
 
 # --- INTERFAZ DE LOGIN ---
 if not st.session_state.logged_in:
@@ -43,7 +53,6 @@ if not st.session_state.logged_in:
             data = fetch_data()
             usuario_encontrado = None
             for p in data["personal"]:
-                # p[0]=Nomina, p[1]=Nombre, p[2]=Apellido, p[3]=Equipo, p[4]=Rol
                 if str(p[0]) == nomina_input and p[1].lower() == nombre_input.lower() and p[2].lower() == apellido_input.lower():
                     usuario_encontrado = {"nomina": p[0], "nombre": f"{p[1]} {p[2]}", "equipo": p[3], "rol": p[4]}
                     break
@@ -65,58 +74,103 @@ else:
         st.write(f"Bienvenido, {user['nombre']}.")
         
         data = fetch_data()
+        equipos_unicos = list(set([p[3] for p in data["personal"] if p[4] != "Admin"]))
         
-        tab1, tab2 = st.tabs(["👥 Mover Equipos", "🔄 Restaurar Días"])
+        tab1, tab2, tab3 = st.tabs(["👥 Gestor de Equipos", "👤 Alta / Baja de Personal", "🔄 Restaurar Días"])
         
+        # TAB 1: MOVER O RENOMBRAR EQUIPOS
         with tab1:
-            st.subheader("Cambiar integrante de equipo")
+            st.subheader("1. Cambiar de equipo a un operario")
             lista_operarios = [f"{p[1]} {p[2]} ({p[0]})" for p in data["personal"] if p[4] != "Admin"]
-            op_seleccionado = st.selectbox("Selecciona al operario:", lista_operarios)
+            if lista_operarios:
+                op_seleccionado = st.selectbox("Selecciona al operario:", lista_operarios, key="sel_mover")
+                nuevo_equipo = st.selectbox("Asignar a nuevo equipo:", equipos_unicos, key="sel_neq")
+                
+                if st.button("Guardar Cambio de Equipo", use_container_width=True):
+                    id_nomina = op_seleccionado.split("(")[-1].replace(")", "")
+                    res = requests.post(API_URL, json={"action": "actualizarEquipo", "nomina": id_nomina, "nuevoEquipo": nuevo_equipo})
+                    if res.status_code == 200:
+                        st.success("Equipo actualizado con éxito.")
+                        st.rerun()
             
-            nuevo_equipo = st.selectbox("Asignar a nuevo equipo:", [
-                "Equipo Edgar", "Equipo Chuy", "Equipo Cristian", "Equipo Martín", "Personal de Apoyo"
-            ])
+            st.write("---")
+            st.subheader("2. Renombrar un equipo completo")
+            equipo_a_renombrar = st.selectbox("Selecciona el equipo a renombrar:", equipos_unicos, key="sel_ren")
+            nuevo_nombre_equipo = st.text_input("Nuevo nombre para el equipo:", placeholder="Ej. Equipo Roberto").strip()
             
-            if st.button("Guardar Cambio de Equipo", use_container_width=True):
-                id_nomina = op_seleccionado.split("(")[-1].replace(")", "")
-                res = requests.post(API_URL, json={"action": "actualizarEquipo", "nomina": id_nomina, "nuevoEquipo": nuevo_equipo})
-                if res.status_code == 200:
-                    st.success("Equipo actualizado con éxito en Google Sheets.")
-                    st.rerun()
-                    
+            if st.button("Renombrar Equipo", use_container_width=True):
+                if nuevo_nombre_equipo:
+                    res = requests.post(API_URL, json={"action": "renombrarEquipo", "equipoAntiguo": equipo_a_renombrar, "equipoNuevo": nuevo_nombre_equipo})
+                    if res.status_code == 200:
+                        st.success(f"Se cambió el nombre de '{equipo_a_renombrar}' a '{nuevo_nombre_equipo}'.")
+                        st.rerun()
+                else:
+                    st.warning("Escribe el nuevo nombre del equipo.")
+
+        # TAB 2: ALTA Y BAJA DE PERSONAL
         with tab2:
+            st.subheader("1. Agregar nuevo trabajador")
+            nuevo_nom = st.text_input("Nombre(s)", key="add_nom").strip()
+            nuevo_ape = st.text_input("Apellido(s)", key="add_ape").strip()
+            nueva_num_nom = st.text_input("Número de Nómina", key="add_num").strip()
+            equipo_destino = st.selectbox("Asignar a equipo:", equipos_unicos, key="add_eq")
+            
+            if st.button("➕ Registrar en Plantilla", use_container_width=True, type="primary"):
+                if nuevo_nom and nuevo_ape and nueva_num_nom:
+                    res = requests.post(API_URL, json={
+                        "action": "agregarPersonal",
+                        "nombre": nuevo_nom,
+                        "apellido": nuevo_ape,
+                        "nomina": nueva_num_nom,
+                        "equipo": equipo_destino
+                    })
+                    if res.status_code == 200:
+                        st.success(f"Trabajador {nuevo_nom} {nuevo_ape} registrado con éxito.")
+                        st.rerun()
+                else:
+                    st.warning("Completa todos los campos obligatorios.")
+            
+            st.write("---")
+            st.subheader("2. Dar de baja a un trabajador")
+            if lista_operarios:
+                op_baja = st.selectbox("Selecciona al integrante a eliminar:", lista_operarios, key="sel_baja")
+                if st.button("🗑️ Eliminar Trabajador", use_container_width=True):
+                    id_nomina_baja = op_baja.split("(")[-1].replace(")", "")
+                    res = requests.post(API_URL, json={"action": "eliminarPersonal", "nomina": id_nomina_baja})
+                    if res.status_code == 200:
+                        st.success("Trabajador eliminado de la plantilla.")
+                        st.rerun()
+
+        # TAB 3: RESTAURAR DÍAS
+        with tab3:
             st.subheader("Restaurar / Limpiar Vacaciones de un Operario")
-            op_limpiar = st.selectbox("Selecciona al operario para liberar sus días:", lista_operarios, key="limpiar")
-            if st.button("Liberar Días y Poner Disponibles", use_container_width=True):
-                id_nomina = op_limpiar.split("(")[-1].replace(")", "")
-                res = requests.post(API_URL, json={"action": "liberarDias", "nomina": id_nomina})
-                if res.status_code == 200:
-                    st.success("Días restaurados y puestos disponibles automáticamente.")
-                    st.rerun()
-                    
+            if lista_operarios:
+                op_limpiar = st.selectbox("Selecciona al operario para liberar sus días:", lista_operarios, key="limpiar")
+                if st.button("Liberar Días y Poner Disponibles", use_container_width=True):
+                    id_nomina = op_limpiar.split("(")[-1].replace(")", "")
+                    res = requests.post(API_URL, json={"action": "liberarDias", "nomina": id_nomina})
+                    if res.status_code == 200:
+                        st.success("Días restaurados correctamente.")
+                        st.rerun()
+
         if st.button("Cerrar Sesión", key="logout_admin", use_container_width=True):
             st.session_state.logged_in = False
             st.rerun()
 
     # ---------------- ROL: OPERARIO (MÓVIL) ----------------
     else:
+        # Mostrar el pop-up de RH al ser activado tras enviar la solicitud
+        if st.session_state.mostrar_aviso_rh:
+            aviso_rh_pop_up()
+
         st.markdown(f"### 👋 ¡Hola, {user['nombre']}!")
         st.markdown(f"**Equipo:** {user['equipo']} | **Nómina:** {user['nomina']}")
         st.write("---")
         
-        # Obtener datos frescos de ocupación
         data = fetch_data()
+        fechas_bloqueadas = [str(d[0]).split("T")[0] for d in data["diasOcupados"] if d[1] == user["equipo"]]
         
-        # Filtrar fechas ocupadas SOLO para el equipo de este operario
-        fechas_bloqueadas = []
-        for d in data["diasOcupados"]:
-            if d[1] == user["equipo"]:
-                fecha_str = str(d[0]).split("T")[0]
-                fechas_bloqueadas.append(fecha_str)
-        
-        # --- CONTROLADOR DE MESES DINÁMICO ---
         hoy = datetime.date.today()
-        
         if "mes_actual" not in st.session_state:
             st.session_state.mes_actual = hoy.month
         if "anio_actual" not in st.session_state:
@@ -128,7 +182,6 @@ else:
         }
 
         col_ant, col_mes, col_sig = st.columns([1, 2, 1])
-        
         with col_ant:
             if st.button("⬅️ Ant.", use_container_width=True):
                 if st.session_state.mes_actual == 1:
@@ -153,17 +206,14 @@ else:
 
         st.write("Los días en **rojo🔴** ya están ocupados por compañeros de tu equipo.")
         
-        # Generar matriz del mes seleccionado
         cal = calendar.Calendar(firstweekday=6)
         mes_dias = cal.monthdatescalendar(st.session_state.anio_actual, st.session_state.mes_actual)
         
-        # Nombres de los días de la semana
         dias_semana = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"]
         cols_dias = st.columns(7)
         for i, d_sem in enumerate(dias_semana):
             cols_dias[i].markdown(f"<p style='text-align:center; font-weight:bold; margin:0;'>{d_sem}</p>", unsafe_allow_html=True)
 
-        # Renderizar cuadrícula interactiva del mes seleccionado
         for semana in mes_dias:
             cols = st.columns(7)
             for idx, dia in enumerate(semana):
@@ -190,16 +240,12 @@ else:
         
         st.write("")
         if st.session_state.dias_seleccionados:
-            resumen_dias = []
-            for d in sorted(st.session_state.dias_seleccionados):
-                p = d.split("-")
-                resumen_dias.append(f"{p[2]}/{meses_es[int(p[1])][:3]}")
-                
+            resumen_dias = [f"{d.split('-')[2]}/{meses_es[int(d.split('-')[1])][:3]}" for d in sorted(st.session_state.dias_seleccionados)]
             st.info(f"Días marcados acumulados: {', '.join(resumen_dias)}")
             
             @st.dialog("Confirmar Solicitud")
             def confirmar_pop_up():
-                st.write(f"Estás a punto de solicitar las siguientes fechas de vacaciones:")
+                st.write("Estás a punto de solicitar las siguientes fechas de vacaciones:")
                 for f in sorted(st.session_state.dias_seleccionados):
                     partes = f.split("-")
                     st.write(f"• {partes[2]} de {meses_es[int(partes[1])]} de {partes[0]}")
@@ -216,9 +262,8 @@ else:
                         }
                         res = requests.post(API_URL, json=payload)
                         if res.status_code == 200:
-                            st.success("¡Solicitud de vacaciones enviada con éxito a los encargados del área!")
                             st.session_state.dias_seleccionados = []
-                            st.toast("Notificación enviada por correo 📧")
+                            st.session_state.mostrar_aviso_rh = True
                             st.rerun()
                 with col2:
                     if st.button("Volver", use_container_width=True):
