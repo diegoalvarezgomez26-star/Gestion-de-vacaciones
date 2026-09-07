@@ -306,7 +306,6 @@ else:
                             "equipo": user["equipo"],
                             "fechas": st.session_state.dias_seleccionados
                         }
-                        # Petición Asíncrona: ¡Cero tiempos de espera para el usuario!
                         request_api_async(payload)
                         fetch_data.clear()
                         st.session_state.dias_seleccionados = []
