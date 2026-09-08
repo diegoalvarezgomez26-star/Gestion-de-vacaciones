@@ -9,6 +9,9 @@ st.set_page_config(page_title="Vacaciones Operarios", page_icon="📅", layout="
 # Reemplaza con tu URL pública de Apps Script
 API_URL = "https://script.google.com/macros/s/AKfycbxs3HejJqWfWpEls3s1N7mciFAuWO4eEi2xMVA-18HWogzSjlW7730kW07CI0hKljoU_g/exec"
 
+# Equipos base para garantizar que siempre exista "Personal de Apoyo"
+EQUIPOS_BASE = ["Equipo Edgar", "Equipo Chuy", "Equipo Cristian", "Equipo Martín", "Personal de Apoyo"]
+
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "usuario" not in st.session_state:
@@ -19,7 +22,6 @@ if "mostrar_aviso_rh" not in st.session_state:
     st.session_state.mostrar_aviso_rh = False
 
 def request_api_async(payload):
-    """Envío asíncrono en segundo plano para respuesta inmediata al operario."""
     def worker():
         try:
             requests.post(API_URL, json=payload, allow_redirects=True)
@@ -28,14 +30,13 @@ def request_api_async(payload):
     threading.Thread(target=worker, daemon=True).start()
 
 def request_api_sync(payload):
-    """Envío síncrono para acciones del administrador."""
     try:
         res = requests.post(API_URL, json=payload, allow_redirects=True)
         return res.json()
     except:
         return {"status": "error"}
 
-@st.cache_data(ttl=3)
+@st.cache_data(ttl=2)
 def fetch_data():
     try:
         response = requests.get(f"{API_URL}?action=getData")
@@ -90,7 +91,8 @@ else:
         st.title("🛡️ Panel de Administrador")
         
         data = fetch_data()
-        equipos_unicos = list(set([p[3] for p in data["personal"] if p[4] != "Admin"]))
+        # Mantenimiento persistente de equipos base + dinámicos
+        equipos_unicos = sorted(list(set(EQUIPOS_BASE + [p[3] for p in data["personal"] if p[4] != "Admin"])))
         
         tab1, tab2, tab3 = st.tabs(["👥 Gestor de Equipos", "👤 Alta / Baja", "📅 Gestión de Vacaciones"])
         
@@ -150,22 +152,20 @@ else:
                     st.success("Trabajador eliminado.")
                     st.rerun()
 
-        # TAB 3: GESTIÓN DE VACACIONES
+        # TAB 3: GESTIÓN DE VACACIONES (CANCELACIÓN ESPECÍFICA)
         with tab3:
             st.subheader("Gestión de Vacaciones por Persona")
-            with st.form("form_buscar_admin"):
-                b_nom = st.text_input("Nombre(s)").strip()
-                b_ape = st.text_input("Apellido(s)").strip()
-                b_nomina = st.text_input("Número de Nómina").strip()
-                if st.form_submit_button("Buscar Operario", use_container_width=True):
-                    st.session_state["admin_busca"] = {"nom": b_nom.lower(), "ape": b_ape.lower(), "nomina": b_nomina}
             
-            if "admin_busca" in st.session_state:
-                busca = st.session_state["admin_busca"]
-                usuario_gest = next((p for p in data["personal"] if str(p[0]) == busca["nomina"] and p[1].lower() == busca["nom"] and p[2].lower() == busca["ape"]), None)
+            # Selector directo para evitar errores de búsqueda manual
+            lista_operarios_gest = [f"{p[1]} {p[2]} (Nómina: {p[0]})" for p in data["personal"] if p[4] != "Admin"]
+            
+            if lista_operarios_gest:
+                op_sel_gest = st.selectbox("Selecciona al operario a consultar/modificar:", lista_operarios_gest)
+                id_nomina_sel = op_sel_gest.split("(Nómina: ")[-1].replace(")", "").strip()
+                usuario_gest = next((p for p in data["personal"] if str(p[0]) == id_nomina_sel), None)
                 
                 if usuario_gest:
-                    st.success(f"Operario encontrado: {usuario_gest[1]} {usuario_gest[2]} ({usuario_gest[3]})")
+                    st.success(f"Operario: {usuario_gest[1]} {usuario_gest[2]} | Equipo: {usuario_gest[3]}")
                     
                     if "admin_mes" not in st.session_state:
                         st.session_state.admin_mes = hoy.month
@@ -213,12 +213,10 @@ else:
                                             })
                                             if res.get("status") == "success":
                                                 fetch_data.clear()
-                                                st.toast(f"Día {dia_str} cancelado y correo enviado.")
+                                                st.success(f"Día {dia_str} cancelado y liberado con éxito.")
                                                 st.rerun()
                                     else:
                                         st.markdown(f"<button style='width:100%; border:none; padding:5px;' disabled>{dia.day}</button>", unsafe_allow_html=True)
-                else:
-                    st.error("Operario no encontrado.")
 
         st.divider()
         if st.button("Cerrar Sesión", use_container_width=True):
