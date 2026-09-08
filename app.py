@@ -6,10 +6,9 @@ import threading
 
 st.set_page_config(page_title="Vacaciones Operarios", page_icon="📅", layout="centered")
 
-# URL de tu implementación de Apps Script
+# Reemplaza con tu URL pública de Apps Script
 API_URL = "https://script.google.com/macros/s/AKfycbxs3HejJqWfWpEls3s1N7mciFAuWO4eEi2xMVA-18HWogzSjlW7730kW07CI0hKljoU_g/exec"
 
-# Inicializar estados de la sesión
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "usuario" not in st.session_state:
@@ -29,14 +28,14 @@ def request_api_async(payload):
     threading.Thread(target=worker, daemon=True).start()
 
 def request_api_sync(payload):
-    """Envío síncrono para acciones críticas del administrador."""
+    """Envío síncrono para acciones del administrador."""
     try:
         res = requests.post(API_URL, json=payload, allow_redirects=True)
         return res.json()
     except:
         return {"status": "error"}
 
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=3)
 def fetch_data():
     try:
         response = requests.get(f"{API_URL}?action=getData")
@@ -106,12 +105,14 @@ else:
                 if st.button("Guardar Cambio de Equipo", use_container_width=True):
                     id_nomina = op_seleccionado.split("(")[-1].replace(")", "")
                     res = request_api_sync({"action": "actualizarEquipo", "nomina": id_nomina, "nuevoEquipo": nuevo_equipo})
+                    
                     if res.get("status") == "success":
                         if res.get("conflictos", 0) > 0:
-                            st.warning(f"Equipo actualizado, pero se detectaron {res['conflictos']} conflictos de fechas. Se envió alerta por correo.")
+                            st.warning(f"⚠️ Equipo actualizado. Se detectaron {res['conflictos']} conflicto(s) de fecha. Se ha enviado una alerta por correo a los encargados.")
                         else:
-                            st.success("Equipo actualizado y sincronizado con el calendario.")
+                            st.success("✅ Equipo actualizado correctamente y sincronizado con el calendario.")
                         fetch_data.clear()
+                        st.rerun()
             
             st.divider()
             st.subheader("2. Renombrar un equipo completo")
@@ -149,7 +150,7 @@ else:
                     st.success("Trabajador eliminado.")
                     st.rerun()
 
-        # TAB 3: GESTIÓN DE VACACIONES (CANCELACIÓN ESPECÍFICA)
+        # TAB 3: GESTIÓN DE VACACIONES
         with tab3:
             st.subheader("Gestión de Vacaciones por Persona")
             with st.form("form_buscar_admin"):
@@ -183,7 +184,6 @@ else:
                         st.session_state.admin_anio += 1 if st.session_state.admin_mes == 1 else 0
                         st.rerun()
                     
-                    # Días apartados por este usuario
                     fechas_usuario = [str(d[0]).split("T")[0] for d in data["diasOcupados"] if str(d[2]) == str(usuario_gest[0])]
                     
                     cal = calendar.Calendar(firstweekday=6)
