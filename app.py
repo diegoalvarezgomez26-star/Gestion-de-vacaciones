@@ -9,7 +9,6 @@ st.set_page_config(page_title="Vacaciones Operarios", page_icon="📅", layout="
 # Reemplaza con tu URL pública de Apps Script
 API_URL = "https://script.google.com/macros/s/AKfycbxs3HejJqWfWpEls3s1N7mciFAuWO4eEi2xMVA-18HWogzSjlW7730kW07CI0hKljoU_g/exec"
 
-# Equipos base para garantizar que siempre exista "Personal de Apoyo"
 EQUIPOS_BASE = ["Equipo Edgar", "Equipo Chuy", "Equipo Cristian", "Equipo Martín", "Personal de Apoyo"]
 
 if "logged_in" not in st.session_state:
@@ -91,7 +90,6 @@ else:
         st.title("🛡️ Panel de Administrador")
         
         data = fetch_data()
-        # Mantenimiento persistente de equipos base + dinámicos
         equipos_unicos = sorted(list(set(EQUIPOS_BASE + [p[3] for p in data["personal"] if p[4] != "Admin"])))
         
         tab1, tab2, tab3 = st.tabs(["👥 Gestor de Equipos", "👤 Alta / Baja", "📅 Gestión de Vacaciones"])
@@ -112,7 +110,7 @@ else:
                         if res.get("conflictos", 0) > 0:
                             st.warning(f"⚠️ Equipo actualizado. Se detectaron {res['conflictos']} conflicto(s) de fecha. Se ha enviado una alerta por correo a los encargados.")
                         else:
-                            st.success("✅ Equipo actualizado correctamente y sincronizado con el calendario.")
+                            st.success("✅ Equipo actualizado correctamente. Todas sus fechas se transfirieron a su nuevo equipo.")
                         fetch_data.clear()
                         st.rerun()
             
@@ -126,6 +124,20 @@ else:
                     fetch_data.clear()
                     st.success("Equipo renombrado con éxito.")
                     st.rerun()
+
+            st.divider()
+            st.subheader("3. Mantenimiento Retroactivo de la Base de Datos")
+            st.caption("Usa este botón para corregir solicitudes históricas pasadas/futuras de personas que cambiaron de equipo antes de las actualizaciones recientes.")
+            if st.button("🔄 Reparar e Igualar Historial Completo", use_container_width=True, type="primary"):
+                with st.spinner("Procesando reestructuración retroactiva en Google Sheets y Calendario..."):
+                    res_rep = request_api_sync({"action": "repararHistorialMaestro"})
+                    if res_rep.get("status") == "success":
+                        fetch_data.clear()
+                        if res_rep.get("empalmes", 0) > 0:
+                            st.warning(f"⚠️ Historial reparado. Se detectaron {res_rep['empalmes']} empalmes históricos. Se envió un reporte detallado a tu correo.")
+                        else:
+                            st.success("🎉 Historial reparado con éxito. Se actualizaron todas las solicitudes pasadas y futuras.")
+                        st.rerun()
 
         # TAB 2: ALTA / BAJA DE PERSONAL
         with tab2:
@@ -152,11 +164,10 @@ else:
                     st.success("Trabajador eliminado.")
                     st.rerun()
 
-        # TAB 3: GESTIÓN DE VACACIONES (CANCELACIÓN ESPECÍFICA)
+        # TAB 3: GESTIÓN DE VACACIONES
         with tab3:
             st.subheader("Gestión de Vacaciones por Persona")
             
-            # Selector directo para evitar errores de búsqueda manual
             lista_operarios_gest = [f"{p[1]} {p[2]} (Nómina: {p[0]})" for p in data["personal"] if p[4] != "Admin"]
             
             if lista_operarios_gest:
@@ -165,7 +176,7 @@ else:
                 usuario_gest = next((p for p in data["personal"] if str(p[0]) == id_nomina_sel), None)
                 
                 if usuario_gest:
-                    st.success(f"Operario: {usuario_gest[1]} {usuario_gest[2]} | Equipo: {usuario_gest[3]}")
+                    st.success(f"Operario: {usuario_gest[1]} {usuario_gest[2]} | Equipo Actual: {usuario_gest[3]}")
                     
                     if "admin_mes" not in st.session_state:
                         st.session_state.admin_mes = hoy.month
@@ -181,7 +192,7 @@ else:
                     
                     if c3.button("Sig. ➡️", key="adm_sig"):
                         st.session_state.admin_mes = 1 if st.session_state.admin_mes == 12 else st.session_state.admin_mes + 1
-                        st.session_state.admin_anio += 1 if st.session_state.admin_mes == 1 else 0
+                        st.session_state.admin_anio += 1 if st.session_state.admin_mes == 12 else 0
                         st.rerun()
                     
                     fechas_usuario = [str(d[0]).split("T")[0] for d in data["diasOcupados"] if str(d[2]) == str(usuario_gest[0])]
