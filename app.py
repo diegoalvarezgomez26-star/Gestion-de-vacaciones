@@ -84,6 +84,7 @@ else:
     user = st.session_state.usuario
     meses_es = {1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"}
     hoy = datetime.date.today()
+    fecha_limite_solicitud = hoy + datetime.timedelta(days=7)
     
     # ---------------- ROL: ADMINISTRADOR ----------------
     if user["rol"] == "Admin":
@@ -192,7 +193,7 @@ else:
                     
                     if c3.button("Sig. ➡️", key="adm_sig"):
                         st.session_state.admin_mes = 1 if st.session_state.admin_mes == 12 else st.session_state.admin_mes + 1
-                        st.session_state.admin_anio += 1 if st.session_state.admin_mes == 12 else 0
+                        st.session_state.admin_anio += 1 if st.session_state.admin_mes == 1 else 0
                         st.rerun()
                     
                     fechas_usuario = [str(d[0]).split("T")[0] for d in data["diasOcupados"] if str(d[2]) == str(usuario_gest[0])]
@@ -243,6 +244,10 @@ else:
         st.markdown(f"**Equipo:** {user['equipo']} | **Nómina:** {user['nomina']}")
         st.write("---")
         
+        # Banner informativo de regla de 7 días
+        fecha_limite_fmt = fecha_limite_solicitud.strftime("%d/%m/%Y")
+        st.info(f"📌 **Regla de Anticipación:** Las vacaciones deben solicitarse con al menos **1 semana (7 días) de anticipación** (solicitudes permitidas a partir del **{fecha_limite_fmt}**).")
+        
         data = fetch_data()
         fechas_bloqueadas = [str(d[0]).split("T")[0] for d in data["diasOcupados"] if d[1] == user["equipo"]]
         
@@ -264,14 +269,20 @@ else:
                 st.session_state.anio_actual += 1 if st.session_state.mes_actual == 1 else 0
                 st.rerun()
 
-        st.write("Los días en **rojo🔴** ya están ocupados por tu equipo.")
+        st.write("Los días en **rojo🔴** ya están ocupados por tu equipo. Los días deshabilitados no cumplen con la anticipación de 7 días.")
         
         cal = calendar.Calendar(firstweekday=6)
-        mes_dias = cal.monthdatescalendar(st.session_state.anio_actual, st.session_state.mes_actual)
+        mes_dias = cal.monthdatescalendar(st.session_state.anio_actual, st.session_state.anio_actual if False else st.session_state.mes_actual)
         
         cols_dias = st.columns(7)
         for i, d_sem in enumerate(["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"]):
             cols_dias[i].markdown(f"<p style='text-align:center; font-weight:bold; margin:0;'>{d_sem}</p>", unsafe_allow_html=True)
+
+        # Filtrar fechas que ya no cumplan con la regla de 7 días en la selección guardada
+        st.session_state.dias_seleccionados = [
+            f for f in st.session_state.dias_seleccionados 
+            if datetime.datetime.strptime(f, "%Y-%m-%d").date() >= fecha_limite_solicitud
+        ]
 
         for semana in mes_dias:
             cols = st.columns(7)
@@ -281,8 +292,13 @@ else:
                         st.write("") 
                     else:
                         dia_str = dia.strftime("%Y-%m-%d")
-                        if dia_str in fechas_bloqueadas:
+                        # 1. Regla de anticipación de 7 días (bloqueo automático si dia < fecha_limite_solicitud)
+                        if dia < fecha_limite_solicitud:
+                            st.markdown(f"<button style='width:100%; border:none; border-radius:5px; padding:5px; color:#aaa; background-color:#f0f0f0;' disabled>{dia.day}</button>", unsafe_allow_html=True)
+                        # 2. Regla de un solo operario por equipo
+                        elif dia_str in fechas_bloqueadas:
                             st.markdown(f"<button style='width:100%; background-color:#FF4B4B; color:white; border:none; border-radius:5px; padding:5px;' disabled>🔴 {dia.day}</button>", unsafe_allow_html=True)
+                        # 3. Días disponibles para selección
                         else:
                             if dia_str in st.session_state.dias_seleccionados:
                                 if st.button(f"✅ {dia.day}", key=f"btn_{dia_str}", use_container_width=True):
