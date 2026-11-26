@@ -23,6 +23,8 @@ if "admin_dias_seleccionados" not in st.session_state:
     st.session_state.admin_dias_seleccionados = []
 if "admin_op_asig_actual" not in st.session_state:
     st.session_state.admin_op_asig_actual = ""
+if "popup_bloqueo_mostrado" not in st.session_state:
+    st.session_state.popup_bloqueo_mostrado = False
 
 def request_api_async(payload):
     def worker():
@@ -45,13 +47,20 @@ def fetch_data():
         response = requests.get(f"{API_URL}?action=getData")
         return response.json()
     except:
-        return {"personal": [], "diasOcupados": []}
+        return {"personal": [], "diasOcupados": [], "bloqueoGeneral": False, "operariosBloqueados": []}
 
 @st.dialog("📌 Recordatorio Importante")
 def aviso_rh_pop_up():
     st.warning("Recuerda recoger tu pase de vacaciones y entregarlo a RH al menos un día hábil antes de tu día de vacaciones.")
     if st.button("Entendido", use_container_width=True, type="primary"):
         st.session_state.mostrar_aviso_rh = False
+        st.rerun()
+
+@st.dialog("🚫 Aviso Importante")
+def aviso_bloqueo_pop_up():
+    st.error("Solicitud de vacaciones canceladas hasta nuevo aviso, acercarse con su superior para la solicitud de vacaciones.")
+    if st.button("Entendido", use_container_width=True, type="primary"):
+        st.session_state.popup_bloqueo_mostrado = True
         st.rerun()
 
 # --- INTERFAZ DE LOGIN ---
@@ -69,6 +78,7 @@ if not st.session_state.logged_in:
                 st.session_state.usuario = {"nombre": "Admin", "nomina": "448", "equipo": "Ninguno", "rol": "Admin"}
                 st.rerun()
             else:
+                fetch_data.clear()
                 data = fetch_data()
                 usuario_encontrado = None
                 for p in data["personal"]:
@@ -79,6 +89,7 @@ if not st.session_state.logged_in:
                 if usuario_encontrado:
                     st.session_state.logged_in = True
                     st.session_state.usuario = usuario_encontrado
+                    st.session_state.popup_bloqueo_mostrado = False
                     st.rerun()
                 else:
                     st.error("Datos incorrectos. Verifica tu Nombre, Apellido y Nómina.")
@@ -96,8 +107,16 @@ else:
         
         data = fetch_data()
         equipos_unicos = sorted(list(set(EQUIPOS_BASE + [p[3] for p in data["personal"] if p[4] != "Admin"])))
+        bloqueo_general_activo = bool(data.get("bloqueoGeneral", False))
+        operarios_bloqueados = [str(n).strip() for n in data.get("operariosBloqueados", [])]
         
-        tab1, tab2, tab3, tab4 = st.tabs(["👥 Equipos", "👤 Alta / Baja", "✅ Asignar Vacaciones", "❌ Cancelar Vacaciones"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            "👥 Equipos", 
+            "👤 Alta / Baja", 
+            "✅ Asignar Vacaciones", 
+            "❌ Cancelar Vacaciones", 
+            "🚫 Bloqueo de Solicitudes"
+        ])
         
         # TAB 1: GESTOR DE EQUIPOS
         with tab1:
@@ -185,7 +204,6 @@ else:
                 id_nomina_asig = op_sel_asig.split("(Nómina: ")[-1].replace(")", "").strip()
                 usuario_asig = next((p for p in data["personal"] if str(p[0]) == id_nomina_asig), None)
                 
-                # Limpiar selección de días si se cambia de operario
                 if id_nomina_asig != st.session_state.admin_op_asig_actual:
                     st.session_state.admin_op_asig_actual = id_nomina_asig
                     st.session_state.admin_dias_seleccionados = []
@@ -195,7 +213,6 @@ else:
                     
                     fechas_bloqueadas_equipo = [str(d[0]).split("T")[0] for d in data["diasOcupados"] if d[1] == usuario_asig[3]]
                     
-                    # Filtrar días previamente seleccionados si ya fueron ocupados
                     st.session_state.admin_dias_seleccionados = [
                         f for f in st.session_state.admin_dias_seleccionados if f not in fechas_bloqueadas_equipo
                     ]
@@ -335,6 +352,97 @@ else:
                                     else:
                                         st.markdown(f"<button style='width:100%; border:none; padding:5px;' disabled>{dia.day}</button>", unsafe_allow_html=True)
 
+        # TAB 5: BLOQUEO DE SOLICITUDES DE VACACIONES (GENERAL E INDIVIDUAL)
+        with tab5:
+            st.subheader("1. Bloqueo General (Todos los Operarios)")
+            st.caption("Activa o levanta la suspensión de solicitudes de vacaciones para todo el personal operativo.")
+            
+            if bloqueo_general_activo:
+                st.error("🔴 **ESTADO ACTUAL:** Bloqueo General **ACTIVADO** (Ningún operario puede solicitar vacaciones).")
+                if st.button("🔓 Levantar Bloqueo General de Vacaciones", key="btn_levantar_gen", use_container_width=True, type="primary"):
+                    with st.spinner("Levantando bloqueo general y enviando notificación..."):
+                        res_bg = request_api_sync({"action": "setBloqueoGeneral", "activar": False})
+                        if res_bg.get("status") == "success":
+                            fetch_data.clear()
+                            st.success("✅ Bloqueo general levantado. Se envió el correo de notificación.")
+                            st.rerun()
+            else:
+                st.success("🟢 **ESTADO ACTUAL:** Solicitudes **HABILITADAS** (Operación normal).")
+                if st.button("🔒 Activar Bloqueo General de Vacaciones", key="btn_activar_gen", use_container_width=True, type="primary"):
+                    with st.spinner("Activando bloqueo general y enviando notificación..."):
+                        res_bg = request_api_sync({"action": "setBloqueoGeneral", "activar": True})
+                        if res_bg.get("status") == "success":
+                            fetch_data.clear()
+                            st.warning("🔒 Bloqueo general activado. Se envió el correo de notificación.")
+                            st.rerun()
+
+            st.divider()
+            st.subheader("2. Bloqueo Individual (Por Operario)")
+            st.caption("Bloquea o habilita la solicitud de vacaciones únicamente para el operario seleccionado.")
+            
+            lista_operarios_bloq = [f"{p[1]} {p[2]} (Nómina: {p[0]})" for p in data["personal"] if p[4] != "Admin"]
+            if lista_operarios_bloq:
+                op_sel_bloq = st.selectbox("Selecciona al operario:", lista_operarios_bloq, key="sel_op_bloq")
+                id_nomina_bloq = op_sel_bloq.split("(Nómina: ")[-1].replace(")", "").strip()
+                usuario_bloq = next((p for p in data["personal"] if str(p[0]) == id_nomina_bloq), None)
+                
+                if usuario_bloq:
+                    esta_bloq_ind = str(usuario_bloq[0]).strip() in operarios_bloqueados
+                    nombre_comp_bloq = f"{usuario_bloq[1]} {usuario_bloq[2]}"
+                    
+                    if esta_bloq_ind:
+                        st.error(f"🔴 **{nombre_comp_bloq}** (Equipo: {usuario_bloq[3]}) tiene sus solicitudes **BLOQUEADAS**.")
+                        if st.button("🔓 Levantar Bloqueo Individual a este Operario", key="btn_levantar_ind", use_container_width=True, type="primary"):
+                            with st.spinner("Levantando bloqueo individual y enviando correo..."):
+                                res_bi = request_api_sync({
+                                    "action": "setBloqueoIndividual",
+                                    "nomina": str(usuario_bloq[0]),
+                                    "nombre": nombre_comp_bloq,
+                                    "equipo": usuario_bloq[3],
+                                    "activar": False
+                                })
+                                if res_bi.get("status") == "success":
+                                    fetch_data.clear()
+                                    st.success(f"✅ Bloqueo levantado para {nombre_comp_bloq}. Correo enviado.")
+                                    st.rerun()
+                    else:
+                        st.info(f"🟢 **{nombre_comp_bloq}** (Equipo: {usuario_bloq[3]}) tiene sus solicitudes **HABILITADAS**.")
+                        if st.button("🔒 Bloquear Solicitudes a este Operario", key="btn_activar_ind", use_container_width=True):
+                            with st.spinner("Activando bloqueo individual y enviando correo..."):
+                                res_bi = request_api_sync({
+                                    "action": "setBloqueoIndividual",
+                                    "nomina": str(usuario_bloq[0]),
+                                    "nombre": nombre_comp_bloq,
+                                    "equipo": usuario_bloq[3],
+                                    "activar": True
+                                })
+                                if res_bi.get("status") == "success":
+                                    fetch_data.clear()
+                                    st.warning(f"🔒 Bloqueo activado para {nombre_comp_bloq}. Correo enviado.")
+                                    st.rerun()
+
+            if operarios_bloqueados:
+                st.write("")
+                st.markdown("**Operarios con bloqueo individual activo:**")
+                for nom_bloq in operarios_bloqueados:
+                    pers_info = next((p for p in data["personal"] if str(p[0]).strip() == nom_bloq), None)
+                    etiqueta_op = f"{pers_info[1]} {pers_info[2]} (Nómina: {nom_bloq} - {pers_info[3]})" if pers_info else f"Nómina: {nom_bloq}"
+                    col_b1, col_b2 = st.columns([3, 1])
+                    col_b1.write(f"🔴 {etiqueta_op}")
+                    if col_b2.button("🔓 Desbloquear", key=f"quick_unblock_{nom_bloq}", use_container_width=True):
+                        nombre_q = f"{pers_info[1]} {pers_info[2]}" if pers_info else f"Nómina {nom_bloq}"
+                        equipo_q = pers_info[3] if pers_info else "Sin equipo"
+                        res_q = request_api_sync({
+                            "action": "setBloqueoIndividual",
+                            "nomina": nom_bloq,
+                            "nombre": nombre_q,
+                            "equipo": equipo_q,
+                            "activar": False
+                        })
+                        if res_q.get("status") == "success":
+                            fetch_data.clear()
+                            st.rerun()
+
         st.divider()
         if st.button("Cerrar Sesión", use_container_width=True):
             st.session_state.logged_in = False
@@ -343,111 +451,173 @@ else:
 
     # ---------------- ROL: OPERARIO (MÓVIL) ----------------
     else:
-        if st.session_state.mostrar_aviso_rh:
+        data = fetch_data()
+        bloqueo_general_activo = bool(data.get("bloqueoGeneral", False))
+        operarios_bloqueados = [str(n).strip() for n in data.get("operariosBloqueados", [])]
+        esta_bloqueado = bloqueo_general_activo or (str(user["nomina"]).strip() in operarios_bloqueados)
+
+        if not esta_bloqueado:
+            st.session_state.popup_bloqueo_mostrado = False
+
+        if esta_bloqueado and not st.session_state.popup_bloqueo_mostrado:
+            aviso_bloqueo_pop_up()
+        elif not esta_bloqueado and st.session_state.mostrar_aviso_rh:
             aviso_rh_pop_up()
 
         st.markdown(f"### 👋 ¡Hola, {user['nombre']}!")
         st.markdown(f"**Equipo:** {user['equipo']} | **Nómina:** {user['nomina']}")
         st.write("---")
         
-        fecha_limite_fmt = fecha_limite_solicitud.strftime("%d/%m/%Y")
-        st.info(f"📌 **Regla de Anticipación:** Las vacaciones deben solicitarse con al menos **1 semana (7 días) de anticipación** (solicitudes permitidas a partir del **{fecha_limite_fmt}**).")
-        
-        data = fetch_data()
         fechas_bloqueadas = [str(d[0]).split("T")[0] for d in data["diasOcupados"] if d[1] == user["equipo"]]
         
         if "mes_actual" not in st.session_state:
             st.session_state.mes_actual = hoy.month
             st.session_state.anio_actual = hoy.year
 
-        col_ant, col_mes, col_sig = st.columns([1, 2, 1])
-        with col_ant:
-            if st.button("⬅️ Ant.", use_container_width=True):
-                st.session_state.mes_actual = 12 if st.session_state.mes_actual == 1 else st.session_state.mes_actual - 1
-                st.session_state.anio_actual -= 1 if st.session_state.mes_actual == 12 else 0
-                st.rerun()
-        with col_mes:
-            st.markdown(f"<h4 style='text-align: center; margin:0;'>📅 {meses_es[st.session_state.mes_actual]} {st.session_state.anio_actual}</h4>", unsafe_allow_html=True)
-        with col_sig:
-            if st.button("Sig. ➡️", use_container_width=True):
-                st.session_state.mes_actual = 1 if st.session_state.mes_actual == 12 else st.session_state.mes_actual + 1
-                st.session_state.anio_actual += 1 if st.session_state.mes_actual == 1 else 0
-                st.rerun()
-
-        st.write("Los días en **rojo🔴** ya están ocupados por tu equipo. Los días deshabilitados no cumplen con la anticipación de 7 días.")
-        
-        cal = calendar.Calendar(firstweekday=6)
-        mes_dias = cal.monthdatescalendar(st.session_state.anio_actual, st.session_state.mes_actual)
-        
-        cols_dias = st.columns(7)
-        for i, d_sem in enumerate(["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"]):
-            cols_dias[i].markdown(f"<p style='text-align:center; font-weight:bold; margin:0;'>{d_sem}</p>", unsafe_allow_html=True)
-
-        st.session_state.dias_seleccionados = [
-            f for f in st.session_state.dias_seleccionados 
-            if datetime.datetime.strptime(f, "%Y-%m-%d").date() >= fecha_limite_solicitud
-        ]
-
-        for semana in mes_dias:
-            cols = st.columns(7)
-            for idx, dia in enumerate(semana):
-                with cols[idx]:
-                    if dia.month != st.session_state.mes_actual:
-                        st.write("") 
-                    else:
-                        dia_str = dia.strftime("%Y-%m-%d")
-                        if dia < fecha_limite_solicitud:
-                            st.markdown(f"<button style='width:100%; border:none; border-radius:5px; padding:5px; color:#aaa; background-color:#f0f0f0;' disabled>{dia.day}</button>", unsafe_allow_html=True)
-                        elif dia_str in fechas_bloqueadas:
-                            st.markdown(f"<button style='width:100%; background-color:#FF4B4B; color:white; border:none; border-radius:5px; padding:5px;' disabled>🔴 {dia.day}</button>", unsafe_allow_html=True)
-                        else:
-                            if dia_str in st.session_state.dias_seleccionados:
-                                if st.button(f"✅ {dia.day}", key=f"btn_{dia_str}", use_container_width=True):
-                                    st.session_state.dias_seleccionados.remove(dia_str)
-                                    st.rerun()
-                            else:
-                                if st.button(str(dia.day), key=f"btn_{dia_str}", use_container_width=True):
-                                    st.session_state.dias_seleccionados.append(dia_str)
-                                    st.rerun()
-        
-        st.write("")
-        if st.session_state.dias_seleccionados:
-            resumen_dias = [f"{d.split('-')[2]}/{meses_es[int(d.split('-')[1])][:3]}" for d in sorted(st.session_state.dias_seleccionados)]
-            st.info(f"Días marcados acumulados: {', '.join(resumen_dias)}")
-            
-            @st.dialog("Confirmar Solicitud")
-            def confirmar_pop_up():
-                st.write("Estás a punto de solicitar las siguientes fechas:")
-                for f in sorted(st.session_state.dias_seleccionados):
-                    p = f.split("-")
-                    st.write(f"• {p[2]} de {meses_es[int(p[1])]} de {p[0]}")
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("Confirmar", use_container_width=True, type="primary"):
-                        payload = {
-                            "action": "solicitarVacaciones",
-                            "nombre": user["nombre"],
-                            "nomina": user["nomina"],
-                            "equipo": user["equipo"],
-                            "fechas": st.session_state.dias_seleccionados,
-                            "esAdmin": False
-                        }
-                        request_api_async(payload)
-                        fetch_data.clear()
-                        st.session_state.dias_seleccionados = []
-                        st.session_state.mostrar_aviso_rh = True
-                        st.rerun()
-                with col2:
-                    if st.button("Volver", use_container_width=True):
-                        st.rerun()
-            
-            if st.button("Finalizar", use_container_width=True, type="primary"):
-                confirmar_pop_up()
-        
-        if st.button("Salir / Cerrar Sesión", key="logout_op", use_container_width=True):
-            st.session_state.logged_in = False
+        # --- MODO BLOQUEADO (GENERAL O INDIVIDUAL) ---
+        if esta_bloqueado:
             st.session_state.dias_seleccionados = []
-            st.session_state.mes_actual = hoy.month
-            st.session_state.anio_actual = hoy.year
-            st.rerun()
+            st.error("🚫 **Solicitud de vacaciones canceladas hasta nuevo aviso, acercarse con su superior para la solicitud de vacaciones.**")
+
+            col_ant, col_mes, col_sig = st.columns([1, 2, 1])
+            with col_ant:
+                if st.button("⬅️ Ant.", key="bloq_ant", use_container_width=True):
+                    st.session_state.mes_actual = 12 if st.session_state.mes_actual == 1 else st.session_state.mes_actual - 1
+                    st.session_state.anio_actual -= 1 if st.session_state.mes_actual == 12 else 0
+                    st.rerun()
+            with col_mes:
+                st.markdown(f"<h4 style='text-align: center; margin:0;'>📅 {meses_es[st.session_state.mes_actual]} {st.session_state.anio_actual}</h4>", unsafe_allow_html=True)
+            with col_sig:
+                if st.button("Sig. ➡️", key="bloq_sig", use_container_width=True):
+                    st.session_state.mes_actual = 1 if st.session_state.mes_actual == 12 else st.session_state.mes_actual + 1
+                    st.session_state.anio_actual += 1 if st.session_state.mes_actual == 1 else 0
+                    st.rerun()
+
+            st.write("Vista de solo lectura: Los días en **rojo🔴** corresponden a vacaciones ya apartadas por tu equipo.")
+
+            cal = calendar.Calendar(firstweekday=6)
+            mes_dias = cal.monthdatescalendar(st.session_state.anio_actual, st.session_state.mes_actual)
+
+            cols_dias = st.columns(7)
+            for i, d_sem in enumerate(["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"]):
+                cols_dias[i].markdown(f"<p style='text-align:center; font-weight:bold; margin:0;'>{d_sem}</p>", unsafe_allow_html=True)
+
+            for semana in mes_dias:
+                cols = st.columns(7)
+                for idx, dia in enumerate(semana):
+                    with cols[idx]:
+                        if dia.month != st.session_state.mes_actual:
+                            st.write("")
+                        else:
+                            dia_str = dia.strftime("%Y-%m-%d")
+                            if dia_str in fechas_bloqueadas:
+                                st.markdown(f"<button style='width:100%; background-color:#FF4B4B; color:white; border:none; border-radius:5px; padding:5px;' disabled>🔴 {dia.day}</button>", unsafe_allow_html=True)
+                            else:
+                                st.markdown(f"<button style='width:100%; border:none; border-radius:5px; padding:5px; color:#888; background-color:#f0f0f0;' disabled>{dia.day}</button>", unsafe_allow_html=True)
+
+            st.write("")
+            st.divider()
+            if st.button("Finalizar Sesión", key="btn_finalizar_sesion_bloq", use_container_width=True, type="primary"):
+                st.session_state.logged_in = False
+                st.session_state.dias_seleccionados = []
+                st.session_state.popup_bloqueo_mostrado = False
+                st.session_state.mes_actual = hoy.month
+                st.session_state.anio_actual = hoy.year
+                st.rerun()
+
+        # --- MODO NORMAL (SOLICITUDES HABILITADAS) ---
+        else:
+            fecha_limite_fmt = fecha_limite_solicitud.strftime("%d/%m/%Y")
+            st.info(f"📌 **Regla de Anticipación:** Las vacaciones deben solicitarse con al menos **1 semana (7 días) de anticipación** (solicitudes permitidas a partir del **{fecha_limite_fmt}**).")
+
+            col_ant, col_mes, col_sig = st.columns([1, 2, 1])
+            with col_ant:
+                if st.button("⬅️ Ant.", use_container_width=True):
+                    st.session_state.mes_actual = 12 if st.session_state.mes_actual == 1 else st.session_state.mes_actual - 1
+                    st.session_state.anio_actual -= 1 if st.session_state.mes_actual == 12 else 0
+                    st.rerun()
+            with col_mes:
+                st.markdown(f"<h4 style='text-align: center; margin:0;'>📅 {meses_es[st.session_state.mes_actual]} {st.session_state.anio_actual}</h4>", unsafe_allow_html=True)
+            with col_sig:
+                if st.button("Sig. ➡️", use_container_width=True):
+                    st.session_state.mes_actual = 1 if st.session_state.mes_actual == 12 else st.session_state.mes_actual + 1
+                    st.session_state.anio_actual += 1 if st.session_state.mes_actual == 1 else 0
+                    st.rerun()
+
+            st.write("Los días en **rojo🔴** ya están ocupados por tu equipo. Los días deshabilitados no cumplen con la anticipación de 7 días.")
+            
+            cal = calendar.Calendar(firstweekday=6)
+            mes_dias = cal.monthdatescalendar(st.session_state.anio_actual, st.session_state.mes_actual)
+            
+            cols_dias = st.columns(7)
+            for i, d_sem in enumerate(["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"]):
+                cols_dias[i].markdown(f"<p style='text-align:center; font-weight:bold; margin:0;'>{d_sem}</p>", unsafe_allow_html=True)
+
+            st.session_state.dias_seleccionados = [
+                f for f in st.session_state.dias_seleccionados 
+                if datetime.datetime.strptime(f, "%Y-%m-%d").date() >= fecha_limite_solicitud
+            ]
+
+            for semana in mes_dias:
+                cols = st.columns(7)
+                for idx, dia in enumerate(semana):
+                    with cols[idx]:
+                        if dia.month != st.session_state.mes_actual:
+                            st.write("") 
+                        else:
+                            dia_str = dia.strftime("%Y-%m-%d")
+                            if dia < fecha_limite_solicitud:
+                                st.markdown(f"<button style='width:100%; border:none; border-radius:5px; padding:5px; color:#aaa; background-color:#f0f0f0;' disabled>{dia.day}</button>", unsafe_allow_html=True)
+                            elif dia_str in fechas_bloqueadas:
+                                st.markdown(f"<button style='width:100%; background-color:#FF4B4B; color:white; border:none; border-radius:5px; padding:5px;' disabled>🔴 {dia.day}</button>", unsafe_allow_html=True)
+                            else:
+                                if dia_str in st.session_state.dias_seleccionados:
+                                    if st.button(f"✅ {dia.day}", key=f"btn_{dia_str}", use_container_width=True):
+                                        st.session_state.dias_seleccionados.remove(dia_str)
+                                        st.rerun()
+                                else:
+                                    if st.button(str(dia.day), key=f"btn_{dia_str}", use_container_width=True):
+                                        st.session_state.dias_seleccionados.append(dia_str)
+                                        st.rerun()
+            
+            st.write("")
+            if st.session_state.dias_seleccionados:
+                resumen_dias = [f"{d.split('-')[2]}/{meses_es[int(d.split('-')[1])][:3]}" for d in sorted(st.session_state.dias_seleccionados)]
+                st.info(f"Días marcados acumulados: {', '.join(resumen_dias)}")
+                
+                @st.dialog("Confirmar Solicitud")
+                def confirmar_pop_up():
+                    st.write("Estás a punto de solicitar las siguientes fechas:")
+                    for f in sorted(st.session_state.dias_seleccionados):
+                        p = f.split("-")
+                        st.write(f"• {p[2]} de {meses_es[int(p[1])]} de {p[0]}")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("Confirmar", use_container_width=True, type="primary"):
+                            payload = {
+                                "action": "solicitarVacaciones",
+                                "nombre": user["nombre"],
+                                "nomina": user["nomina"],
+                                "equipo": user["equipo"],
+                                "fechas": st.session_state.dias_seleccionados,
+                                "esAdmin": False
+                            }
+                            request_api_async(payload)
+                            fetch_data.clear()
+                            st.session_state.dias_seleccionados = []
+                            st.session_state.mostrar_aviso_rh = True
+                            st.rerun()
+                    with col2:
+                        if st.button("Volver", use_container_width=True):
+                            st.rerun()
+                
+                if st.button("Finalizar", use_container_width=True, type="primary"):
+                    confirmar_pop_up()
+            
+            if st.button("Salir / Cerrar Sesión", key="logout_op", use_container_width=True):
+                st.session_state.logged_in = False
+                st.session_state.dias_seleccionados = []
+                st.session_state.mes_actual = hoy.month
+                st.session_state.anio_actual = hoy.year
+                st.rerun()
